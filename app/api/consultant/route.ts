@@ -1,5 +1,6 @@
+// app/api/consultant/route.ts
 import { streamText } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
+import { google } from "@ai-sdk/google";
 import { linkifyPartnerMentions } from "@/lib/linkify-partners";
 
 export const runtime = "edge";
@@ -43,17 +44,41 @@ RULES:
 `;
 
 export async function POST(req: Request) {
+  // Fail gracefully if no key is configured yet instead of throwing a raw
+  // 500 the frontend can't handle nicely.
+  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    return new Response(
+      "The AI Business Consultant isn't available yet — check back soon.",
+      { status: 200, headers: { "Content-Type": "text/plain" } }
+    );
+  }
+
   const { messages } = await req.json();
 
-  const result = streamText({
-    model: anthropic("claude-sonnet-4-6"),
-    system: CONSULTANT_SYSTEM_PROMPT,
-    messages,
-  });
+  try {
+    const result = streamText({
+      model: google("gemini-2.0-flash"), // free tier via Google AI Studio
+      system: CONSULTANT_SYSTEM_PROMPT,
+      messages,
+    });
 
-  return result.toTextStreamResponse({
-    async onFinish({ text }) {
-      linkifyPartnerMentions(text);
-    },
-  });
+    // Post-process the full text once streaming completes, so any raw brand
+    // mentions the model didn't format itself still become tracked links.
+    // (For token-by-token streaming UIs, run linkifyPartnerMentions on the
+    // final accumulated string client-side instead of here.)
+    return result.toTextStreamResponse({
+      async onFinish({ text }) {
+        linkifyPartnerMentions(text); // hook for logging/analytics if desired
+      },
+    });
+  } catch (err) {
+    // Covers out-of-quota accounts, invalid keys, and rate limit errors —
+    // these throw at request time, not at startup, so the earlier
+    // "no key configured" check above doesn't catch them.
+    console.error("[consultant] API call failed:", err);
+    return new Response(
+      "The AI Business Consultant is temporarily unavailable — please try again later.",
+      { status: 200, headers: { "Content-Type": "text/plain" } }
+    );
+  }
 }
