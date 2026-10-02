@@ -20,13 +20,12 @@ export async function POST(req: Request) {
       model: google("gemini-2.0-flash"),
       system: CONSULTANT_SYSTEM_PROMPT,
       messages,
-    });
-
-    return result.toTextStreamResponse({
       async onFinish({ text }) {
         linkifyPartnerMentions(text);
       },
     });
+
+    return result.toTextStreamResponse();
   } catch (err) {
     console.error("[consultant] API call failed:", err);
     return new Response(
